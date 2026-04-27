@@ -28,6 +28,27 @@ const LIMITATIONS = [
 
 const MOOD_PRESETS = ['따뜻한 가족 드라마', '공포 스릴러', '밝고 경쾌한 광고', '감성 뮤직비디오', '다큐멘터리', '액션 블록버스터', '로맨스', '코미디']
 
+// 이미지를 최대 800px로 압축해서 File 객체로 반환
+async function compressImage(file: File): Promise<File> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    const url = URL.createObjectURL(file)
+    img.onload = () => {
+      const MAX = 800
+      const ratio = Math.min(MAX / img.width, MAX / img.height, 1)
+      const canvas = document.createElement('canvas')
+      canvas.width = img.width * ratio
+      canvas.height = img.height * ratio
+      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height)
+      URL.revokeObjectURL(url)
+      canvas.toBlob((blob) => {
+        resolve(new File([blob!], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }))
+      }, 'image/jpeg', 0.85)
+    }
+    img.src = url
+  })
+}
+
 export default function Home() {
   const [slots, setSlots] = useState<(File | null)[]>([null, null, null])
   const [previews, setPreviews] = useState<(string | null)[]>([null, null, null])
@@ -42,10 +63,11 @@ export default function Home() {
   const fileRefs = [useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null)]
   const resultRef = useRef<HTMLDivElement>(null)
 
-  const handleSlotChange = (index: number, file: File | null) => {
+  const handleSlotChange = async (index: number, file: File | null) => {
     if (!file) return
-    const url = URL.createObjectURL(file)
-    setSlots((prev) => { const next = [...prev]; next[index] = file; return next })
+    const compressed = await compressImage(file)
+    const url = URL.createObjectURL(compressed)
+    setSlots((prev) => { const next = [...prev]; next[index] = compressed; return next })
     setPreviews((prev) => {
       if (prev[index]) URL.revokeObjectURL(prev[index]!)
       const next = [...prev]; next[index] = url; return next
