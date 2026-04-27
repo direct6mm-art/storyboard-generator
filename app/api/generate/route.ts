@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { GoogleGenerativeAI, Part } from '@google/generative-ai'
+import Groq from 'groq-sdk'
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
 export const maxDuration = 60
 
@@ -26,28 +26,28 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '시나리오를 더 자세히 입력해주세요.' }, { status: 400 })
     }
 
-    // Collect reference images
-    const imageParts: Part[] = []
+    // Collect reference images as base64
+    const imageMessages: { type: 'image_url'; image_url: { url: string } }[] = []
     for (let i = 0; i < imageCount; i++) {
       const file = formData.get(`image_${i}`) as File | null
       if (file) {
         const buffer = await file.arrayBuffer()
         const base64 = Buffer.from(buffer).toString('base64')
-        imageParts.push({
-          inlineData: { mimeType: file.type, data: base64 },
+        imageMessages.push({
+          type: 'image_url',
+          image_url: { url: `data:${file.type};base64,${base64}` },
         })
       }
     }
 
-    const hasImages = imageParts.length > 0
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' })
+    const hasImages = imageMessages.length > 0
 
-    const prompt = `${hasImages ? '위의 참조 이미지들을 분석하여 아트 스타일(화풍, 색감, 분위기, 렌더링 기법 등)을 파악하세요.\n\n' : ''}다음 시나리오를 정확히 ${panelCount}개의 스토리보드 패널로 나눠주세요.
+    const textPrompt = `${hasImages ? '위의 참조 이미지들을 분석하여 아트 스타일(화풍, 색감, 분위기, 렌더링 기법 등)을 파악하세요.\n\n' : ''}다음 시나리오를 정확히 ${panelCount}개의 스토리보드 패널로 나눠주세요.
 ${mood ? `\n영상 분위기 및 용도: ${mood}\n이 분위기와 용도에 맞게 이미지 프롬프트, 대사, 지문의 톤을 조정하세요.\n` : ''}
 시나리오:
 ${narrative}
 
-아래 JSON 형식으로만 응답하세요. JSON 외 다른 텍스트나 마크다운 코드블록은 절대 포함하지 마세요:
+아래 JSON 형식으로만 응답하세요. 마크다운 코드블록 없이 순수 JSON만:
 
 {
   "styleDescription": "${hasImages ? '참조 이미지에서 추출한 아트 스타일 설명 (영어로)' : 'cinematic illustrated storyboard style, detailed linework'}",
@@ -65,13 +65,22 @@ ${narrative}
 규칙:
 - panels 배열에 정확히 ${panelCount}개 항목 필수
 - imagePrompt는 반드시 영어로만 작성
-- dialogue와 stageDirection은 한국어로 작성
+- dialogue와 stageDirection은 한국어
 - 시나리오 흐름을 자연스럽게 ${panelCount}개로 분배`
 
-    const parts: Part[] = [...imageParts, { text: prompt }]
-    const result = await model.generateContent(parts)
-    const rawText = result.response.text().trim()
+    const contentParts: Groq.Chat.ChatCompletionContentPart[] = [
+      ...imageMessages,
+      { type: 'text', text: textPrompt },
+    ]
 
+    const response = await groq.chat.completions.create({
+      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+      messages: [{ role: 'user', content: contentParts }],
+      max_tokens: 4096,
+      temperature: 0.7,
+    })
+
+    const rawText = response.choices[0]?.message?.content?.trim() ?? ''
     const jsonMatch = rawText.match(/\{[\s\S]*\}/)
     if (!jsonMatch) throw new Error('응답 파싱 실패: JSON 형식이 아닙니다.')
 

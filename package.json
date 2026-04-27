@@ -11,7 +11,7 @@
     "next": "15.5.15",
     "react": "^18",
     "react-dom": "^18",
-    "@google/generative-ai": "^0.21.0",
+    "groq-sdk": "^0.9.1",
     "jszip": "^3.10.1",
     "file-saver": "^2.0.5"
   },
