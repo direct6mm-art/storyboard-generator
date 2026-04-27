@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
 
@@ -61,9 +61,42 @@ export default function Home() {
   const [loadedImages, setLoadedImages] = useState<Set<number>>(new Set())
   const [failedImages, setFailedImages] = useState<Set<number>>(new Set())
   const [panelUrls, setPanelUrls] = useState<Record<number, string>>({})
+  const [activeUrls, setActiveUrls] = useState<Record<number, string>>({})
   const [isDownloading, setIsDownloading] = useState(false)
   const fileRefs = [useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null)]
   const resultRef = useRef<HTMLDivElement>(null)
+  const imageTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({})
+
+  // 이미지를 1.5초 간격으로 순차 로딩 + 패널당 25초 타임아웃
+  useEffect(() => {
+    if (!result || Object.keys(panelUrls).length === 0) return
+    const staggerTimers: ReturnType<typeof setTimeout>[] = []
+
+    result.panels.forEach((panel, idx) => {
+      const t = setTimeout(() => {
+        const url = panelUrls[panel.id]
+        if (!url) return
+        setActiveUrls((prev) => ({ ...prev, [panel.id]: url }))
+
+        // 25초 안에 로드 안 되면 자동 실패 처리
+        imageTimers.current[panel.id] = setTimeout(() => {
+          setLoadedImages((prev) => {
+            if (!prev.has(panel.id)) {
+              setFailedImages((f) => new Set(f).add(panel.id))
+            }
+            return prev
+          })
+        }, 25000)
+      }, idx * 1500)
+      staggerTimers.push(t)
+    })
+
+    return () => {
+      staggerTimers.forEach(clearTimeout)
+      Object.values(imageTimers.current).forEach(clearTimeout)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result, panelUrls])
 
   const handleSlotChange = async (index: number, file: File | null) => {
     if (!file) return
@@ -156,17 +189,24 @@ export default function Home() {
   }
 
   const retryImage = (id: number) => {
+    clearTimeout(imageTimers.current[id])
     const seed = Math.floor(Math.random() * 99999)
-    setPanelUrls((prev) => {
-      const base = prev[id]?.split('?')[0] ?? ''
-      return { ...prev, [id]: `${base}?width=800&height=500&nologo=true&seed=${seed}` }
-    })
-    setLoadedImages((prev) => { const next = new Set(prev); next.delete(id); return next })
-    setFailedImages((prev) => { const next = new Set(prev); next.delete(id); return next })
+    const base = (panelUrls[id] ?? '').split('?')[0]
+    const newUrl = `${base}?width=800&height=500&nologo=true&seed=${seed}`
+
+    setPanelUrls((prev) => ({ ...prev, [id]: newUrl }))
+    setActiveUrls((prev) => ({ ...prev, [id]: newUrl }))
+    setLoadedImages((prev) => { const n = new Set(prev); n.delete(id); return n })
+    setFailedImages((prev) => { const n = new Set(prev); n.delete(id); return n })
+
+    imageTimers.current[id] = setTimeout(() => {
+      setFailedImages((f) => new Set(f).add(id))
+    }, 25000)
   }
 
   const retryAllFailed = () => {
-    failedImages.forEach((id) => retryImage(id))
+    const ids = Array.from(failedImages)
+    ids.forEach((id, i) => setTimeout(() => retryImage(id), i * 1500))
   }
 
   return (
@@ -370,7 +410,7 @@ export default function Home() {
 
                   {/* 이미지 영역 */}
                   <div className="relative w-full aspect-video bg-gray-800">
-                    {/* 로딩 중 */}
+                    {/* 로딩 중 (아직 activeUrl 없거나 로드 중) */}
                     {!loadedImages.has(panel.id) && !failedImages.has(panel.id) && (
                       <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-gray-800">
                         <svg className="animate-spin h-8 w-8 text-indigo-400" viewBox="0 0 24 24" fill="none">
@@ -391,13 +431,15 @@ export default function Home() {
                       </div>
                     )}
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={panelUrls[panel.id] ?? panel.imageUrl}
-                      alt={panel.caption}
-                      className={`w-full h-full object-cover transition-opacity duration-500 ${loadedImages.has(panel.id) ? 'opacity-100' : 'opacity-0'}`}
-                      onLoad={() => markImageLoaded(panel.id)}
-                      onError={() => markImageFailed(panel.id)}
-                    />
+                    {activeUrls[panel.id] && (
+                      <img
+                        src={activeUrls[panel.id]}
+                        alt={panel.caption}
+                        className={`w-full h-full object-cover transition-opacity duration-500 ${loadedImages.has(panel.id) ? 'opacity-100' : 'opacity-0'}`}
+                        onLoad={() => markImageLoaded(panel.id)}
+                        onError={() => markImageFailed(panel.id)}
+                      />
+                    )}
                   </div>
 
                   <div className="p-4 space-y-2">
