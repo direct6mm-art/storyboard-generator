@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
     }
 
     const hasImages = imageParts.length > 0
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
 
     const prompt = `${hasImages ? '위의 참조 이미지들을 분석하여 아트 스타일(화풍, 색감, 분위기, 렌더링 기법 등)을 파악하세요.\n\n' : ''}다음 시나리오를 정확히 ${panelCount}개의 스토리보드 패널로 나눠주세요.
 ${mood ? `\n영상 분위기 및 용도: ${mood}\n이 분위기와 용도에 맞게 이미지 프롬프트, 대사, 지문의 톤을 조정하세요.\n` : ''}
