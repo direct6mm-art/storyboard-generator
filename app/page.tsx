@@ -59,6 +59,8 @@ export default function Home() {
   const [result, setResult] = useState<GenerateResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loadedImages, setLoadedImages] = useState<Set<number>>(new Set())
+  const [failedImages, setFailedImages] = useState<Set<number>>(new Set())
+  const [panelUrls, setPanelUrls] = useState<Record<number, string>>({})
   const [isDownloading, setIsDownloading] = useState(false)
   const fileRefs = [useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null)]
   const resultRef = useRef<HTMLDivElement>(null)
@@ -86,6 +88,8 @@ export default function Home() {
     setError(null)
     setResult(null)
     setLoadedImages(new Set())
+    setFailedImages(new Set())
+    setPanelUrls({})
     setIsGenerating(true)
 
     try {
@@ -106,7 +110,12 @@ export default function Home() {
         throw new Error(`서버 오류가 발생했습니다. (${res.status}) — 잠시 후 다시 시도해주세요.`)
       }
       if (!res.ok) throw new Error(data.error || '생성 실패')
-      setResult(data as GenerateResult)
+      const generatedResult = data as GenerateResult
+      setResult(generatedResult)
+      // panelUrls 초기화
+      const urls: Record<number, string> = {}
+      generatedResult.panels.forEach((p) => { urls[p.id] = p.imageUrl })
+      setPanelUrls(urls)
       setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '오류가 발생했습니다.')
@@ -137,7 +146,28 @@ export default function Home() {
     } finally { setIsDownloading(false) }
   }
 
-  const markImageLoaded = (id: number) => setLoadedImages((prev) => new Set(prev).add(id))
+  const markImageLoaded = (id: number) => {
+    setLoadedImages((prev) => new Set(prev).add(id))
+    setFailedImages((prev) => { const next = new Set(prev); next.delete(id); return next })
+  }
+
+  const markImageFailed = (id: number) => {
+    setFailedImages((prev) => new Set(prev).add(id))
+  }
+
+  const retryImage = (id: number) => {
+    const seed = Math.floor(Math.random() * 99999)
+    setPanelUrls((prev) => {
+      const base = prev[id]?.split('?')[0] ?? ''
+      return { ...prev, [id]: `${base}?width=800&height=500&nologo=true&seed=${seed}` }
+    })
+    setLoadedImages((prev) => { const next = new Set(prev); next.delete(id); return next })
+    setFailedImages((prev) => { const next = new Set(prev); next.delete(id); return next })
+  }
+
+  const retryAllFailed = () => {
+    failedImages.forEach((id) => retryImage(id))
+  }
 
   return (
     <main className="min-h-screen bg-gray-950 pb-24">
@@ -286,21 +316,44 @@ export default function Home() {
         {/* Result */}
         {result && (
           <div ref={resultRef}>
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="text-lg font-bold text-white">스토리보드 결과</h2>
-                <p className="text-xs text-gray-500 mt-0.5">총 {result.panels.length}개 패널 · 이미지는 순차적으로 로드됩니다</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  이미지 <span className="text-indigo-400 font-semibold">{loadedImages.size}</span> / {result.panels.length} 로드됨
+                  {failedImages.size > 0 && <span className="text-red-400 ml-2">· {failedImages.size}개 실패</span>}
+                </p>
               </div>
-              <button onClick={handleDownload} disabled={isDownloading}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm text-gray-300 transition-colors disabled:opacity-50">
-                {isDownloading ? (
-                  <><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                  </svg>다운로드 중...</>
-                ) : <>⬇ ZIP 다운로드</>}
-              </button>
+              <div className="flex gap-2">
+                {failedImages.size > 0 && (
+                  <button onClick={retryAllFailed}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-xs text-yellow-300 transition-colors">
+                    🔄 실패 이미지 재시도
+                  </button>
+                )}
+                <button onClick={handleDownload} disabled={isDownloading}
+                  className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm text-gray-300 transition-colors disabled:opacity-50">
+                  {isDownloading ? (
+                    <><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                    </svg>다운로드 중...</>
+                  ) : <>⬇ ZIP 다운로드</>}
+                </button>
+              </div>
             </div>
+
+            {/* 전체 로딩 진행 바 */}
+            {loadedImages.size < result.panels.length && (
+              <div className="mb-6">
+                <div className="w-full bg-gray-800 rounded-full h-1.5">
+                  <div
+                    className="bg-indigo-500 h-1.5 rounded-full transition-all duration-500"
+                    style={{ width: `${(loadedImages.size / result.panels.length) * 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               {result.panels.map((panel, idx) => (
@@ -316,10 +369,10 @@ export default function Home() {
                   </div>
 
                   {/* 이미지 영역 */}
-                  <div className="relative w-full aspect-video bg-gray-800 mx-0">
-                    {/* 로딩 상태 */}
-                    {!loadedImages.has(panel.id) && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-800 gap-3">
+                  <div className="relative w-full aspect-video bg-gray-800">
+                    {/* 로딩 중 */}
+                    {!loadedImages.has(panel.id) && !failedImages.has(panel.id) && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-gray-800">
                         <svg className="animate-spin h-8 w-8 text-indigo-400" viewBox="0 0 24 24" fill="none">
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
@@ -327,10 +380,24 @@ export default function Home() {
                         <p className="text-xs text-gray-500">이미지 생성 중...</p>
                       </div>
                     )}
+                    {/* 실패 상태 */}
+                    {failedImages.has(panel.id) && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-gray-800">
+                        <p className="text-xs text-gray-500">이미지 로드 실패</p>
+                        <button onClick={() => retryImage(panel.id)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-indigo-600 rounded-lg text-xs text-white transition-colors">
+                          🔄 다시 시도
+                        </button>
+                      </div>
+                    )}
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={panel.imageUrl} alt={panel.caption}
+                    <img
+                      src={panelUrls[panel.id] ?? panel.imageUrl}
+                      alt={panel.caption}
                       className={`w-full h-full object-cover transition-opacity duration-500 ${loadedImages.has(panel.id) ? 'opacity-100' : 'opacity-0'}`}
-                      onLoad={() => markImageLoaded(panel.id)} onError={() => markImageLoaded(panel.id)} />
+                      onLoad={() => markImageLoaded(panel.id)}
+                      onError={() => markImageFailed(panel.id)}
+                    />
                   </div>
 
                   <div className="p-4 space-y-2">
