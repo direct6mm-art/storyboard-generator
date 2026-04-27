@@ -76,9 +76,15 @@ export default function Home() {
       activeImages.forEach((file, i) => formData.append(`image_${i}`, file))
 
       const res = await fetch('/api/generate', { method: 'POST', body: formData })
-      const data = await res.json()
+      const text = await res.text()
+      let data: { error?: string; panels?: Panel[]; styleDescription?: string }
+      try {
+        data = JSON.parse(text)
+      } catch {
+        throw new Error(`서버 오류가 발생했습니다. (${res.status}) — 잠시 후 다시 시도해주세요.`)
+      }
       if (!res.ok) throw new Error(data.error || '생성 실패')
-      setResult(data)
+      setResult(data as GenerateResult)
       setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '오류가 발생했습니다.')

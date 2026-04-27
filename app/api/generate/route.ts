@@ -3,7 +3,7 @@ import { GoogleGenerativeAI, Part } from '@google/generative-ai'
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
 
-export const maxDuration = 120
+export const maxDuration = 60
 
 interface Panel {
   id: number
