@@ -307,18 +307,34 @@ export default function Home() {
                 <div key={panel.id}
                   className="panel-animate bg-gray-900 rounded-2xl overflow-hidden border border-gray-800 hover:border-gray-600 transition-colors"
                   style={{ animationDelay: `${idx * 0.05}s` }}>
-                  <div className="relative w-full aspect-video bg-gray-800">
-                    {!loadedImages.has(panel.id) && <div className="absolute inset-0 panel-image-skeleton" />}
+                  {/* 컷 넘버 헤더 */}
+                  <div className="flex items-center gap-3 px-4 pt-4 pb-2">
+                    <span className="text-2xl font-black text-white font-mono tracking-tight">
+                      #{String(panel.id).padStart(2, '0')}
+                    </span>
+                    <h3 className="text-sm font-bold text-white">{panel.caption}</h3>
+                  </div>
+
+                  {/* 이미지 영역 */}
+                  <div className="relative w-full aspect-video bg-gray-800 mx-0">
+                    {/* 로딩 상태 */}
+                    {!loadedImages.has(panel.id) && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-800 gap-3">
+                        <svg className="animate-spin h-8 w-8 text-indigo-400" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                        </svg>
+                        <p className="text-xs text-gray-500">이미지 생성 중...</p>
+                      </div>
+                    )}
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={panel.imageUrl} alt={panel.caption}
                       className={`w-full h-full object-cover transition-opacity duration-500 ${loadedImages.has(panel.id) ? 'opacity-100' : 'opacity-0'}`}
                       onLoad={() => markImageLoaded(panel.id)} onError={() => markImageLoaded(panel.id)} />
-                    <div className="absolute top-2 left-2 bg-black/60 backdrop-blur text-white text-xs px-2 py-0.5 rounded-full font-mono">
-                      #{String(panel.id).padStart(2, '0')}
-                    </div>
                   </div>
+
                   <div className="p-4 space-y-2">
-                    <h3 className="text-sm font-bold text-white">{panel.caption}</h3>
+                    <h3 className="sr-only">{panel.caption}</h3>
                     {panel.dialogue && (
                       <div className="bg-gray-800 rounded-lg px-3 py-2">
                         <span className="text-xs text-indigo-400 font-semibold block mb-0.5">대사</span>
