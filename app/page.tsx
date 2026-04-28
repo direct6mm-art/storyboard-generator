@@ -60,43 +60,41 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null)
   const [loadedImages, setLoadedImages] = useState<Set<number>>(new Set())
   const [failedImages, setFailedImages] = useState<Set<number>>(new Set())
-  const [panelUrls, setPanelUrls] = useState<Record<number, string>>({})
   const [activeUrls, setActiveUrls] = useState<Record<number, string>>({})
+  const [retryCounts, setRetryCounts] = useState<Record<number, number>>({})
   const [isDownloading, setIsDownloading] = useState(false)
   const fileRefs = [useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null)]
   const resultRef = useRef<HTMLDivElement>(null)
-  const imageTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({})
+  const panelsRef = useRef<Panel[]>([])
 
-  // 이미지를 1.5초 간격으로 순차 로딩 + 패널당 25초 타임아웃
-  useEffect(() => {
-    if (!result || Object.keys(panelUrls).length === 0) return
-    const staggerTimers: ReturnType<typeof setTimeout>[] = []
+  // 이미지 URL 생성 (프롬프트 기반, seed 제거로 캐시 활용)
+  const buildUrl = (prompt: string) =>
+    `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=768&height=512&model=flux-schnell`
 
-    result.panels.forEach((panel, idx) => {
-      const t = setTimeout(() => {
-        const url = panelUrls[panel.id]
-        if (!url) return
-        setActiveUrls((prev) => ({ ...prev, [panel.id]: url }))
+  // 큐 기반 로딩: 동시 2개 제한
+  const loadQueue = useRef<number[]>([])
+  const activeCount = useRef(0)
+  const MAX_CONCURRENT = 2
 
-        // 25초 안에 로드 안 되면 자동 실패 처리
-        imageTimers.current[panel.id] = setTimeout(() => {
-          setLoadedImages((prev) => {
-            if (!prev.has(panel.id)) {
-              setFailedImages((f) => new Set(f).add(panel.id))
-            }
-            return prev
-          })
-        }, 25000)
-      }, idx * 1500)
-      staggerTimers.push(t)
-    })
-
-    return () => {
-      staggerTimers.forEach(clearTimeout)
-      Object.values(imageTimers.current).forEach(clearTimeout)
+  const processQueue = () => {
+    while (activeCount.current < MAX_CONCURRENT && loadQueue.current.length > 0) {
+      const id = loadQueue.current.shift()!
+      activeCount.current++
+      const panel = panelsRef.current.find((p) => p.id === id)
+      if (!panel) { activeCount.current--; processQueue(); return }
+      const url = buildUrl(panel.imagePrompt + (retryCounts[id] ? ` v${retryCounts[id]}` : ''))
+      setActiveUrls((prev) => ({ ...prev, [id]: url }))
     }
+  }
+
+  useEffect(() => {
+    if (!result || result.panels.length === 0) return
+    panelsRef.current = result.panels
+    loadQueue.current = result.panels.map((p) => p.id)
+    activeCount.current = 0
+    processQueue()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [result, panelUrls])
+  }, [result])
 
   const handleSlotChange = async (index: number, file: File | null) => {
     if (!file) return
@@ -122,7 +120,10 @@ export default function Home() {
     setResult(null)
     setLoadedImages(new Set())
     setFailedImages(new Set())
-    setPanelUrls({})
+    setActiveUrls({})
+    setRetryCounts({})
+    loadQueue.current = []
+    activeCount.current = 0
     setIsGenerating(true)
 
     try {
@@ -145,10 +146,6 @@ export default function Home() {
       if (!res.ok) throw new Error(data.error || '생성 실패')
       const generatedResult = data as GenerateResult
       setResult(generatedResult)
-      // panelUrls 초기화
-      const urls: Record<number, string> = {}
-      generatedResult.panels.forEach((p) => { urls[p.id] = p.imageUrl })
-      setPanelUrls(urls)
       setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '오류가 발생했습니다.')
@@ -179,34 +176,46 @@ export default function Home() {
     } finally { setIsDownloading(false) }
   }
 
-  const markImageLoaded = (id: number) => {
+  const onImageLoad = (id: number) => {
     setLoadedImages((prev) => new Set(prev).add(id))
-    setFailedImages((prev) => { const next = new Set(prev); next.delete(id); return next })
+    setFailedImages((prev) => { const n = new Set(prev); n.delete(id); return n })
+    activeCount.current = Math.max(0, activeCount.current - 1)
+    processQueue()
   }
 
-  const markImageFailed = (id: number) => {
-    setFailedImages((prev) => new Set(prev).add(id))
+  const onImageError = (id: number) => {
+    const currentRetry = retryCounts[id] ?? 0
+    if (currentRetry < 3) {
+      // 자동 재시도 (3회까지)
+      const nextRetry = currentRetry + 1
+      setRetryCounts((prev) => ({ ...prev, [id]: nextRetry }))
+      const panel = panelsRef.current.find((p) => p.id === id)
+      if (panel) {
+        const url = buildUrl(panel.imagePrompt + ` v${nextRetry}`)
+        setTimeout(() => setActiveUrls((prev) => ({ ...prev, [id]: url })), 2000)
+      }
+    } else {
+      // 3회 실패 → 수동 재시도 표시
+      setFailedImages((prev) => new Set(prev).add(id))
+      activeCount.current = Math.max(0, activeCount.current - 1)
+      processQueue()
+    }
   }
 
   const retryImage = (id: number) => {
-    clearTimeout(imageTimers.current[id])
-    const seed = Math.floor(Math.random() * 99999)
-    const base = (panelUrls[id] ?? '').split('?')[0]
-    const newUrl = `${base}?width=800&height=500&nologo=true&seed=${seed}`
-
-    setPanelUrls((prev) => ({ ...prev, [id]: newUrl }))
-    setActiveUrls((prev) => ({ ...prev, [id]: newUrl }))
-    setLoadedImages((prev) => { const n = new Set(prev); n.delete(id); return n })
     setFailedImages((prev) => { const n = new Set(prev); n.delete(id); return n })
-
-    imageTimers.current[id] = setTimeout(() => {
-      setFailedImages((f) => new Set(f).add(id))
-    }, 25000)
+    setLoadedImages((prev) => { const n = new Set(prev); n.delete(id); return n })
+    setRetryCounts((prev) => ({ ...prev, [id]: 0 }))
+    activeCount.current++
+    const panel = panelsRef.current.find((p) => p.id === id)
+    if (panel) {
+      const url = buildUrl(panel.imagePrompt + ` retry${Date.now()}`)
+      setActiveUrls((prev) => ({ ...prev, [id]: url }))
+    }
   }
 
   const retryAllFailed = () => {
-    const ids = Array.from(failedImages)
-    ids.forEach((id, i) => setTimeout(() => retryImage(id), i * 1500))
+    Array.from(failedImages).forEach((id) => retryImage(id))
   }
 
   return (
@@ -410,35 +419,45 @@ export default function Home() {
 
                   {/* 이미지 영역 */}
                   <div className="relative w-full aspect-video bg-gray-800">
-                    {/* 로딩 중 (아직 activeUrl 없거나 로드 중) */}
+                    {/* 이미지 (항상 렌더, pointer-events-none으로 오버레이 클릭 보장) */}
+                    {activeUrls[panel.id] && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={activeUrls[panel.id]}
+                        alt={panel.caption}
+                        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-500 pointer-events-none ${
+                          loadedImages.has(panel.id) ? 'opacity-100' : 'opacity-0'
+                        }`}
+                        onLoad={() => onImageLoad(panel.id)}
+                        onError={() => onImageError(panel.id)}
+                      />
+                    )}
+                    {/* 로딩 중 오버레이 */}
                     {!loadedImages.has(panel.id) && !failedImages.has(panel.id) && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-gray-800">
+                      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-gray-800">
                         <svg className="animate-spin h-8 w-8 text-indigo-400" viewBox="0 0 24 24" fill="none">
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                         </svg>
-                        <p className="text-xs text-gray-500">이미지 생성 중...</p>
+                        <p className="text-xs text-gray-500">
+                          {activeUrls[panel.id] ? '이미지 생성 중...' : '대기 중...'}
+                        </p>
+                        {(retryCounts[panel.id] ?? 0) > 0 && (
+                          <p className="text-xs text-yellow-600">재시도 {retryCounts[panel.id]}/3</p>
+                        )}
                       </div>
                     )}
-                    {/* 실패 상태 */}
+                    {/* 실패 오버레이 */}
                     {failedImages.has(panel.id) && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-gray-800">
+                      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-gray-800">
                         <p className="text-xs text-gray-500">이미지 로드 실패</p>
-                        <button onClick={() => retryImage(panel.id)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-indigo-600 rounded-lg text-xs text-white transition-colors">
+                        <button
+                          onClick={() => retryImage(panel.id)}
+                          className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs text-white transition-colors cursor-pointer"
+                        >
                           🔄 다시 시도
                         </button>
                       </div>
-                    )}
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    {activeUrls[panel.id] && (
-                      <img
-                        src={activeUrls[panel.id]}
-                        alt={panel.caption}
-                        className={`w-full h-full object-cover transition-opacity duration-500 ${loadedImages.has(panel.id) ? 'opacity-100' : 'opacity-0'}`}
-                        onLoad={() => markImageLoaded(panel.id)}
-                        onError={() => markImageFailed(panel.id)}
-                      />
                     )}
                   </div>
 
